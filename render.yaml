@@ -1,0 +1,23 @@
+# Render Blueprint: Dashboard > New > Blueprint で このリポジトリを選ぶだけでデプロイできます。
+services:
+  - type: web
+    name: weblingo
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*' --workers 1
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: APP_PASSWORD        # 設定するとサイト全体にパスワード（Basic認証）がかかります
+        sync: false
+      - key: OPENAI_API_KEY      # AI翻訳を使う場合のみ
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: AI_DAILY_CHAR_LIMIT
+        value: "200000"
+      - key: MYMEMORY_EMAIL      # 任意。無料翻訳の上限が 1日5,000→50,000文字に
+        sync: false

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f7fb">
+  <meta name="description" content="URLを貼るだけ。海外Webサイトを日本語で読み、原文と訳文を同時に比較できる翻訳リーダー。">
+  <title>WebLingo — URLを貼って、世界を読む。</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="site-shell">
+    <header class="topbar">
+      <div class="brand" aria-label="WebLingo">
+        <span class="brand-icon" aria-hidden="true"><span>あ</span><span>A</span></span>
+        <span class="brand-name">web<span>lingo</span><span class="brand-dot">.</span></span>
+      </div>
+      <div class="top-actions">
+        <span class="header-tag"><span class="tag-dot"></span> BILINGUAL READER</span>
+        <button id="themeBtn" class="icon-button" type="button" aria-label="ダークモード切り替え" title="テーマを切り替え">☾</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-text">
+          <div class="eyebrow"><span class="eyebrow-line"></span> TRANSLATE THE WEB, YOUR WAY</div>
+          <h1>URLを貼って、<br><span class="hero-gradient">世界を読む。</span></h1>
+          <p>海外のWebサイトも、使い慣れた言葉で。<br class="desktop-only">原文と訳文を並べて、知りたい情報にもっと近づく。</p>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="visual-card visual-back"><span class="visual-flag">EN</span><b>Discover new ideas.</b><span class="visual-lines"><i></i><i></i><i></i></span></div>
+          <div class="visual-crossover">⇄</div>
+          <div class="visual-card visual-front"><span class="visual-flag">JA</span><b>新しい発見を、<br>もっと身近に。</b><span class="visual-lines"><i></i><i></i><i></i></span></div>
+          <span class="visual-spark spark-one">✳</span><span class="visual-spark spark-two">✦</span>
+        </div>
+      </section>
+
+      <section class="translator-controls" aria-label="翻訳設定">
+        <form id="translateForm">
+          <label class="url-caption" for="urlInput"><span class="caption-square">◈</span> WEBSITE URL <span class="caption-hint">翻訳したいWebページのURLを入力</span></label>
+          <div class="url-field">
+            <span class="url-leading" aria-hidden="true">⌁</span>
+            <input id="urlInput" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://example.com/article" required aria-label="翻訳するWebサイトのURL">
+            <button id="clearBtn" class="clear-button" type="button" title="URLを消去" aria-label="URLを消去">×</button>
+            <button class="main-button" id="translateBtn" type="submit"><span class="button-icon">↗</span><span id="translateBtnText">ページを翻訳</span></button>
+          </div>
+          <div class="options-row">
+            <div class="options-left">
+              <label class="field-select"><span>翻訳元</span><select id="sourceLang" aria-label="翻訳元の言語"><option value="auto">自動検出</option><option value="en">英語</option><option value="ja">日本語</option><option value="ko">韓国語</option><option value="zh-CN">中国語（簡体）</option><option value="fr">フランス語</option><option value="de">ドイツ語</option><option value="es">スペイン語</option><option value="pt">ポルトガル語</option><option value="it">イタリア語</option></select></label>
+              <button type="button" id="swapBtn" class="swap-button" aria-label="翻訳元と翻訳先の言語を入れ替え" title="言語を入れ替え">⇄</button>
+              <label class="field-select"><span>翻訳先</span><select id="targetLang" aria-label="翻訳先の言語"><option value="ja">日本語</option><option value="en">英語</option><option value="ko">韓国語</option><option value="zh-CN">中国語（簡体）</option><option value="fr">フランス語</option><option value="de">ドイツ語</option><option value="es">スペイン語</option><option value="pt">ポルトガル語</option><option value="it">イタリア語</option></select></label>
+            </div>
+            <div class="options-right">
+              <label class="field-select provider-select"><span>翻訳エンジン</span><select id="provider" aria-label="翻訳エンジン"><option value="free">無料翻訳</option><option value="openai">AI翻訳（高品質）</option></select></label>
+            </div>
+          </div>
+        </form>
+        <div class="controls-bottom"><div id="engineHint" class="engine-hint"><span class="hint-info">ⓘ</span> 無料翻訳には公開APIを使用します。1日の利用上限があります。</div><div class="kbd-hint">Enter ↵ で翻訳</div></div>
+      </section>
+
+      <section id="statusArea" class="status-area" hidden aria-live="polite"><div id="statusMark" class="status-mark"></div><span id="statusText"></span><div class="status-track"><div id="statusProgress" class="status-progress"></div></div><button id="cancelBtn" type="button" class="cancel-button">中止</button></section>
+      <section id="errorArea" class="error-area" hidden role="alert"><span class="error-icon">!</span><div><b>処理を完了できませんでした</b><p id="errorText"></p></div><button id="dismissError" type="button" aria-label="エラーを閉じる">×</button></section>
+
+      <section id="welcomePanel" class="welcome-panel">
+        <div class="welcome-top"><div class="section-eyebrow">YOUR WORKSPACE <span></span></div><h2>すべての言葉に、アクセスしよう。</h2><p>サイトのURLを入力すると、原文と翻訳文がここに表示されます。</p></div>
+        <div class="feature-grid">
+          <div class="feature"><div class="feature-icon feature-icon-purple">▣</div><h3>左右で比較</h3><p>元の文章と訳文を同じ画面で確認。技術記事や海外ニュースにも。</p></div>
+          <div class="feature"><div class="feature-icon feature-icon-peach">✧</div><h3>自然な日本語</h3><p>AI翻訳に切り替えれば、文脈に合わせた読みやすい訳文へ。</p></div>
+          <div class="feature"><div class="feature-icon feature-icon-mint">↗</div><h3>すぐに始められる</h3><p>ページのURLをコピー＆ペースト。ブラウザからそのまま利用。</p></div>
+        </div>
+        <div class="welcome-foot"><span>お試しURL</span><button type="button" class="demo-link" data-url="https://www.w3.org/Consortium/">W3Cについて ↗</button><button type="button" class="demo-link" data-url="https://www.python.org/about/">Python公式 ↗</button></div>
+      </section>
+
+      <section id="resultPanel" class="result-panel" hidden aria-label="翻訳結果">
+        <div class="result-toolbar"><div class="page-information"><div class="page-label"><span class="page-status-dot"></span> TRANSLATED PAGE</div><h2 id="pageTitle">—</h2><a id="pageLink" class="page-link" target="_blank" rel="noopener noreferrer" href="#">元サイトを開く ↗</a></div><div class="result-actions"><button id="sizeBtn" class="tool-button" type="button" title="文字サイズ変更">A<span>±</span></button><button id="copyBtn" class="tool-button" type="button" title="翻訳をコピー">⧉ <span>コピー</span></button><button id="downloadBtn" class="tool-button" type="button" title="翻訳をテキストで保存">↓ <span>保存</span></button></div></div>
+        <div class="mobile-tabs" role="tablist" aria-label="表示内容"><button id="tabOriginal" role="tab" aria-selected="false" data-tab="original">原文を表示</button><button id="tabTranslated" role="tab" aria-selected="true" data-tab="translated" class="active">翻訳を表示</button></div>
+        <div id="readerGrid" class="reader-grid" data-mobile-tab="translated">
+          <article class="reader-pane" id="originalPane"><header class="reader-head"><div class="reader-head-title"><div class="language-emblem emblem-original">EN</div><div><small>ORIGINAL</small><h3>原文</h3></div></div><div id="originalInfo" class="reader-head-meta">—</div></header><div id="originalBody" class="reader-body" tabindex="0"></div></article>
+          <article class="reader-pane translated-pane" id="translatedPane"><header class="reader-head"><div class="reader-head-title"><div id="translatedEmblem" class="language-emblem emblem-translated">JA</div><div><small>TRANSLATION</small><h3>翻訳</h3></div></div><div id="translatedInfo" class="reader-head-meta">—</div></header><div id="translatedBody" class="reader-body" tabindex="0"></div></article>
+        </div>
+        <p class="reading-note"><span>ⓘ</span> 読みやすさを優先して本文を再構成しています。ログイン必須ページ・JavaScriptで生成される内容・画像内の文字は翻訳できない場合があります。</p>
+      </section>
+
+      <section id="historySection" class="history-section" hidden><div class="history-header"><h2>最近翻訳したURL</h2><button id="clearHistory" type="button">履歴を消去</button></div><div id="historyList" class="history-list"></div></section>
+    </main>
+    <footer class="footer"><div class="footer-left"><span class="footer-logo">web<span>lingo.</span></span><span>言葉の壁を、低くする。</span></div><span>Built for a more open web <span class="footer-star">✳</span></span></footer>
+  </div>
+</body>
+</html>

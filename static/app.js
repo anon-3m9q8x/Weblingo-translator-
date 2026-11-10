@@ -1,0 +1,244 @@
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const state = { page: null, translations: new Map(), abort: null, fontSize: 14, dark: false, freeLimit: 4000, aiLimit: 30000, openai: false };
+const LANG_NAMES = { auto:'自動検出', en:'英語', ja:'日本語', ko:'韓国語', 'zh-CN':'中国語', fr:'フランス語', de:'ドイツ語', es:'スペイン語', pt:'ポルトガル語', it:'イタリア語' };
+
+function setTheme(dark) {
+  state.dark = dark;
+  document.body.classList.toggle('dark', dark);
+  $('themeBtn').textContent = dark ? '☼' : '☾';
+  try { localStorage.setItem('webLingoTheme', dark ? 'dark' : 'light'); } catch (_) {}
+}
+function setStatus(message, progress = 5) {
+  $('statusArea').hidden = false;
+  $('statusText').textContent = message;
+  $('statusProgress').style.width = `${Math.min(100, Math.max(0, progress))}%`;
+}
+function clearStatus(){ $('statusArea').hidden = true; }
+function showError(message) { $('errorText').textContent = message; $('errorArea').hidden = false; }
+function clearError(){ $('errorArea').hidden = true; }
+function isAbort(err){ return err && err.name === 'AbortError'; }
+function busy(flag) { $('translateBtn').disabled = flag; $('translateBtnText').textContent = flag ? '翻訳中…' : 'ページを翻訳'; }
+function readHistory(){ try {return JSON.parse(localStorage.getItem('webLingoHistory') || '[]') || [];} catch (_) {return [];} }
+function storeHistory(url, title){
+  try {
+    const updated = [{url, title, date:Date.now()}, ...readHistory().filter(x => x.url !== url)].slice(0, 7);
+    localStorage.setItem('webLingoHistory', JSON.stringify(updated));
+  } catch (_) {}
+  renderHistory();
+}
+function renderHistory(){
+  const list = $('historyList'); list.replaceChildren();
+  const items = readHistory();
+  $('historySection').hidden = !items.length;
+  items.forEach(item => {
+    const button = document.createElement('button');
+    button.className = 'history-item'; button.type = 'button';
+    button.textContent = item.title || item.url;
+    button.title = item.url;
+    button.addEventListener('click', () => { $('urlInput').value = item.url; $('translateForm').requestSubmit(); window.scrollTo({top:0,behavior:'smooth'}); });
+    list.append(button);
+  });
+}
+function createBlock(block, translated = false){
+  const node = document.createElement(block.type === 'image' ? 'figure' : 'div');
+  node.className = `reading-block type-${block.type}`;
+  node.dataset.id = block.id;
+  if (block.level) node.dataset.level = String(block.level);
+  if (block.type === 'image') {
+    const img = document.createElement('img'); img.src = block.image_url;
+    img.alt = block.text || 'ページ内の画像'; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
+    node.append(img);
+    if (block.text) { const cap = document.createElement('figcaption'); cap.textContent = block.text; node.append(cap); }
+  } else if (translated) {
+    node.classList.add('is-pending');
+    const placeholder = document.createElement('span'); placeholder.className = 'translation-pending';
+    placeholder.textContent = '翻訳しています…'; node.append(placeholder);
+  } else {
+    node.textContent = block.text;
+    if (block.href) {
+      const a = document.createElement('a'); a.href = block.href;
+      a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = ' ↗';
+      a.setAttribute('aria-label','リンクを別タブで開く'); node.append(a);
+    }
+  }
+  if (block.type !== 'heading') node.style.fontSize = `${state.fontSize}px`;
+  return node;
+}
+function renderReader(page){
+  $('welcomePanel').hidden = true;
+  $('resultPanel').hidden = false;
+  $('pageTitle').textContent = page.title || new URL(page.url).hostname;
+  $('pageLink').href = page.url;
+  $('originalInfo').textContent = `${page.blocks.length} セクション`;
+  $('translatedInfo').textContent = `${LANG_NAMES[$('targetLang').value] || $('targetLang').value}に翻訳`;
+  const originalLang = $('sourceLang').value !== 'auto' ? $('sourceLang').value : page.detected_language;
+  document.querySelector('.emblem-original').textContent = (originalLang && originalLang !== 'unknown' ? originalLang : '??').slice(0,2).toUpperCase();
+  $('translatedEmblem').textContent = $('targetLang').value.slice(0,2).toUpperCase();
+  const origFragment = document.createDocumentFragment(), tranFragment = document.createDocumentFragment();
+  page.blocks.forEach(block => { origFragment.append(createBlock(block)); tranFragment.append(createBlock(block,true)); });
+  $('originalBody').replaceChildren(origFragment);
+  $('translatedBody').replaceChildren(tranFragment);
+}
+function applyTranslation(item) {
+  state.translations.set(item.id, item.text);
+  const node = Array.from($('translatedBody').children).find(el => el.dataset.id === item.id);
+  if (node) { node.textContent = item.text; node.classList.remove('is-pending'); }
+}
+function markUntranslated(ids, message){
+  ids.forEach(id => {
+    const node = Array.from($('translatedBody').children).find(el => el.dataset.id === id);
+    if (node) { node.replaceChildren(); node.classList.remove('is-pending'); const span = document.createElement('span'); span.className='translation-failed'; span.textContent=message; node.append(span); }
+  });
+}
+function markPendingAsCancelled(){
+  const ids = Array.from($('translatedBody').querySelectorAll('.reading-block.is-pending')).map(el => el.dataset.id);
+  markUntranslated(ids, '翻訳を中止しました');
+}
+function createBatches(blocks, maxBatchChars = 1800, maxBatchItems = 9){
+  const batches=[]; let items=[], count=0;
+  const flush=()=>{if(items.length){batches.push(items);items=[];count=0;}};
+  for(const block of blocks){
+    if (items.length>=maxBatchItems || count+block.text.length>maxBatchChars) flush();
+    items.push({id:block.id, text:block.text}); count+=block.text.length;
+  }
+  flush(); return batches;
+}
+async function postJson(path, body, signal){
+  const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal});
+  let data={}; try{data=await res.json();}catch(_){}
+  if(!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}: サーバーエラー`);
+  return data;
+}
+function normalizeUrl(value){
+  const trimmed=value.trim();
+  if (!trimmed) throw new Error('翻訳したいURLを入力してください。');
+  const full = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try { const u = new URL(full); if (!['http:','https:'].includes(u.protocol)) throw new Error(); return u.href; }
+  catch(_) { throw new Error('URLの形式が正しくありません。'); }
+}
+async function translatePage(event){
+  if (event) event.preventDefault();
+  if(state.abort) state.abort.abort();
+  const controller=new AbortController(); state.abort=controller;
+  clearError(); busy(true); state.translations.clear();
+  let count=0;
+  try {
+    const url=normalizeUrl($('urlInput').value);
+    $('urlInput').value=url;
+    setStatus('Webページを取得しています…', 8);
+    const page=await postJson('/api/extract', {url}, controller.signal);
+    if (controller.signal.aborted) return;
+    if (!page.blocks.length) throw new Error('本文テキストを検出できませんでした。JavaScriptで描画されるサイトの可能性があります。');
+    state.page=page; renderReader(page); storeHistory(page.url,page.title);
+    const provider=$('provider').value;
+    let source=$('sourceLang').value;
+    if(source==='auto'){
+      const detected=page.detected_language;
+      source=(detected==='zh'?'zh-CN':detected);
+      if(!LANG_NAMES[source]) source='en';
+    }
+    const target=$('targetLang').value;
+    const maxChars=provider==='free'?state.freeLimit:state.aiLimit;
+    let included=[],total=0, skipped=[];
+    for(const block of page.blocks){
+      if(block.type==='image') continue;
+      if(total+block.text.length<=maxChars){included.push(block);total+=block.text.length;}
+      else skipped.push(block.id);
+    }
+    if(skipped.length) markUntranslated(skipped, provider==='free' ? '翻訳対象の文字数上限を超えました。AI翻訳をご利用ください。' : '1ページあたりの翻訳上限を超えたため未翻訳です。');
+    if(!included.length) throw new Error('翻訳対象の文章が見つかりませんでした。');
+    const batches=createBatches(included, provider==='free'?1350:4300, provider==='free'?7:10);
+    let complete=0, failed=0, firstError='';
+    setStatus(`翻訳中 · 0 / ${included.length} セクション`, 18);
+    const workers=Array.from({length:Math.min(2,batches.length)},async(_,i)=>{
+      for(let j=i;j<batches.length;j+=2){
+        if(controller.signal.aborted) return;
+        const batch=batches[j];
+        try {
+          const data=await postJson('/api/translate', {items:batch,source_language:source,target_language:target,provider},controller.signal);
+          data.translations.forEach(applyTranslation);
+          count+=data.translations.length;
+        } catch(err){
+          if(isAbort(err)) return;
+          failed+=batch.length;
+          if(!firstError) firstError=err.message;
+          markUntranslated(batch.map(x=>x.id), '翻訳できませんでした');
+        }
+        complete+=batch.length;
+        setStatus(`翻訳中 · ${complete} / ${included.length} セクション`, 18+82*(complete/included.length));
+      }
+    });
+    await Promise.all(workers);
+    if(controller.signal.aborted) return;
+    clearStatus();
+    if(failed){showError(`${failed} セクションの翻訳に失敗しました。${firstError}`);}
+    else if(skipped.length || page.truncated){showError(provider==='free' ? '一部の文章は文字数・取得サイズの上限を超えたため翻訳していません。AI翻訳なら多くの文章を翻訳できます。' : '一部の文章は文字数・取得サイズの上限を超えたため翻訳していません。');}
+    $('translatedInfo').textContent=`${count} セクション翻訳済み`;
+  } catch(err) {
+    if(!isAbort(err)) {clearStatus(); showError(err.message || 'エラーが発生しました。');}
+  } finally {
+    if(state.abort===controller){state.abort=null;busy(false);clearStatus();}
+  }
+}
+function translatedText(){
+  if(!state.page) return '';
+  return `${state.page.title}\n${state.page.url}\n\n`+state.page.blocks.filter(b=>b.type!=='image').map(b=>state.translations.get(b.id)||`[未翻訳] ${b.text}`).join('\n\n');
+}
+function saveText(){
+  if(!state.page) return;
+  const blob=new Blob([translatedText()],{type:'text/plain;charset=utf-8'});
+  const link=document.createElement('a');link.href=URL.createObjectURL(blob);
+  link.download='weblingo_translation.txt';document.body.append(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(link.href),250);
+}
+function setToolLabel(id, icon, label){
+  const span=document.createElement('span'); span.textContent=label;
+  $(id).replaceChildren(document.createTextNode(`${icon} `), span);
+}
+async function copyText(){
+  if(!state.page)return;
+  try{await navigator.clipboard.writeText(translatedText());setToolLabel('copyBtn','✓','コピー済み');setTimeout(()=>setToolLabel('copyBtn','⧉','コピー'),1700);}
+  catch(_){showError('クリップボードにコピーできませんでした。HTTPSまたは localhost で利用してください。');}
+}
+async function init(){
+  setTheme((()=>{try{return localStorage.getItem('webLingoTheme')==='dark';}catch(_){return false;}})());
+  renderHistory();
+  $('translateForm').addEventListener('submit',translatePage);
+  $('clearBtn').addEventListener('click',()=>{$('urlInput').value='';$('urlInput').focus();});
+  $('dismissError').addEventListener('click',clearError);
+  $('themeBtn').addEventListener('click',()=>setTheme(!state.dark));
+  $('cancelBtn').addEventListener('click',()=>{if(state.abort)state.abort.abort();markPendingAsCancelled();clearStatus();busy(false);});
+  $('swapBtn').addEventListener('click',()=>{
+    const oldSource=$('sourceLang').value, oldTarget=$('targetLang').value;
+    $('sourceLang').value=oldTarget;
+    $('targetLang').value=oldSource==='auto'?'en':oldSource;
+  });
+  $('provider').addEventListener('change',updateEngineHint);
+  $('copyBtn').addEventListener('click',copyText);
+  $('downloadBtn').addEventListener('click',saveText);
+  $('sizeBtn').addEventListener('click',()=>{
+    state.fontSize=state.fontSize>=18?12:state.fontSize+2;
+    document.querySelectorAll('.reading-block:not(.type-heading)').forEach(el=>el.style.fontSize=`${state.fontSize}px`);
+  });
+  document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{
+    const name=button.dataset.tab;
+    $('readerGrid').dataset.mobileTab=name;
+    document.querySelectorAll('[data-tab]').forEach(b=>{const current=b.dataset.tab===name;b.classList.toggle('active',current);b.setAttribute('aria-selected',String(current));});
+  }));
+  document.querySelectorAll('.demo-link').forEach(b=>b.addEventListener('click',()=>{$('urlInput').value=b.dataset.url;$('translateForm').requestSubmit();}));
+  $('clearHistory').addEventListener('click',()=>{try{localStorage.removeItem('webLingoHistory');}catch(_){}renderHistory();});
+  try {
+    const res=await fetch('/api/status'); if(res.ok){const d=await res.json();state.freeLimit=d.max_free_chars;state.aiLimit=d.max_ai_chars;state.openai=d.openai_available;state.aiRemaining=d.ai_daily_remaining;}
+  }catch(_){}
+  updateEngineHint();
+}
+function updateEngineHint(){
+  const isAI=$('provider').value==='openai';
+  const aiOption=$('provider').querySelector('option[value="openai"]');
+  aiOption.textContent=state.openai?'AI翻訳（高品質）':'AI翻訳（未設定）';
+  const remain=typeof state.aiRemaining==='number'?` 本日の残り約${state.aiRemaining.toLocaleString()}文字。`:'';
+  $('engineHint').textContent=isAI ? (state.openai?`ⓘ AI翻訳が利用できます。${remain}`:'ⓘ AI翻訳はこのサーバーでは利用できません（APIキー未設定または本日の上限到達）。無料翻訳をご利用ください。') : 'ⓘ 無料翻訳はMyMemory公開APIを使用します。1日あたりの利用上限があります。';
+}
+init();
