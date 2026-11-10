@@ -155,13 +155,19 @@ async function translateFreeInBrowser(items, source, target, signal){
   }
   return results;
 }
+function applyTone(translations, target, provider){
+  // MyMemory cannot be told a style, so make Japanese free translations conversational afterwards.
+  if(provider!=='free' || target!=='ja' || $('tone').value!=='casual' || typeof window.toCasualJa!=='function') return translations;
+  return translations.map(t=>({id:t.id, text:window.toCasualJa(t.text)}));
+}
 async function translateBatch(batch, source, target, provider, signal){
+  const tone=$('tone').value;
   if(provider==='free'){
-    try { return await translateFreeInBrowser(batch, source, target, signal); }
+    try { return applyTone(await translateFreeInBrowser(batch, source, target, signal), target, provider); }
     catch(err){ if(isAbort(err)) throw err; /* fall back to the server below */ }
   }
-  const data=await postJson('/api/translate', {items:batch,source_language:source,target_language:target,provider},signal);
-  return data.translations;
+  const data=await postJson('/api/translate', {items:batch,source_language:source,target_language:target,provider,tone},signal);
+  return applyTone(data.translations, target, provider);
 }
 async function postJson(path, body, signal){
   const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal});
@@ -274,6 +280,8 @@ async function init(){
     $('targetLang').value=oldSource==='auto'?'en':oldSource;
   });
   $('provider').addEventListener('change',updateEngineHint);
+  try { const savedTone=localStorage.getItem('webLingoTone'); if(savedTone==='casual'||savedTone==='polite') $('tone').value=savedTone; } catch(_){}
+  $('tone').addEventListener('change',()=>{ try{localStorage.setItem('webLingoTone',$('tone').value);}catch(_){} });
   $('copyBtn').addEventListener('click',copyText);
   $('downloadBtn').addEventListener('click',saveText);
   $('sizeBtn').addEventListener('click',()=>{

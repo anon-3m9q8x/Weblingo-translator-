@@ -80,7 +80,7 @@ def test_extract_api_with_mocked_fetch(monkeypatch):
 
 def test_translate_api_with_mocked_provider(monkeypatch):
     import app as server
-    async def mock_translate(items, source, target, provider):
+    async def mock_translate(items, source, target, provider, tone="casual"):
         return [{'id': x['id'], 'text': 'こんにちは'} for x in items]
     monkeypatch.setattr(server.translator, 'translate', mock_translate)
     response = TestClient(app).post('/api/translate', json={
@@ -146,7 +146,7 @@ def test_rate_limiter_and_budget():
 def test_translate_rate_limit_returns_429(monkeypatch):
     import app as server
     from limits import RateLimiter
-    async def mock_translate(items, source, target, provider):
+    async def mock_translate(items, source, target, provider, tone="casual"):
         return [{'id': x['id'], 'text': 'ok'} for x in items]
     monkeypatch.setattr(server.translator, 'translate', mock_translate)
     monkeypatch.setattr(server, 'translate_limiter', RateLimiter(1, 600))
@@ -160,7 +160,7 @@ def test_translate_rate_limit_returns_429(monkeypatch):
 def test_ai_daily_budget(monkeypatch):
     import app as server
     from limits import DailyBudget
-    async def mock_translate(items, source, target, provider):
+    async def mock_translate(items, source, target, provider, tone="casual"):
         return [{'id': x['id'], 'text': 'ok'} for x in items]
     monkeypatch.setattr(server.translator, 'translate', mock_translate)
     monkeypatch.setattr(server, 'ai_budget', DailyBudget(8))
@@ -181,3 +181,38 @@ def test_optional_password(monkeypatch):
     assert client.get('/', headers={'Authorization': f'Basic {token}'}).status_code == 200
     bad = base64.b64encode(b'weblingo:wrong').decode()
     assert client.get('/', headers={'Authorization': f'Basic {bad}'}).status_code == 401
+
+
+def test_tone_is_validated_and_passed(monkeypatch):
+    import app as server
+    seen = {}
+    async def mock_translate(items, source, target, provider, tone='casual'):
+        seen['tone'] = tone
+        return [{'id': x['id'], 'text': 'ok'} for x in items]
+    monkeypatch.setattr(server.translator, 'translate', mock_translate)
+    client = TestClient(app)
+    body = {'items': [{'id': 'b0', 'text': 'Hello'}], 'source_language': 'en', 'target_language': 'ja', 'provider': 'free'}
+    assert client.post('/api/translate', json=body).status_code == 200 and seen['tone'] == 'casual'
+    assert client.post('/api/translate', json={**body, 'tone': 'polite'}).status_code == 200 and seen['tone'] == 'polite'
+    assert client.post('/api/translate', json={**body, 'tone': 'rude'}).status_code == 422
+
+
+def test_ai_prompt_includes_tone(monkeypatch):
+    import asyncio, json
+    import translation
+    captured = {}
+    class FakeResp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {'choices': [{'message': {'content': json.dumps({'translations': [{'id': '0', 'text': 'やあ'}]})}}]}
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def post(self, url, headers=None, json=None):
+            captured['system'] = json['messages'][0]['content']; return FakeResp()
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    monkeypatch.setattr(translation.httpx, 'AsyncClient', FakeClient)
+    out = asyncio.run(translation.TranslateService().translate([{'id': 'b0', 'text': 'Hi'}], 'en', 'ja', 'openai', 'casual'))
+    assert out == [{'id': 'b0', 'text': 'やあ'}]
+    assert 'conversational' in captured['system'] and 'です・ます' in captured['system']

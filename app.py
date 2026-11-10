@@ -63,12 +63,20 @@ class TranslateRequest(BaseModel):
     source_language: str = 'auto'
     target_language: str = 'ja'
     provider: str = 'free'
+    tone: str = 'casual'
 
     @field_validator('source_language', 'target_language')
     @classmethod
     def validate_lang(cls, value: str) -> str:
         if value not in ('auto', 'ja', 'en', 'ko', 'zh-CN', 'fr', 'de', 'es', 'pt', 'it'):
             raise ValueError('unsupported language')
+        return value
+
+    @field_validator('tone')
+    @classmethod
+    def validate_tone(cls, value: str) -> str:
+        if value not in ('casual', 'polite'):
+            raise ValueError('unsupported tone')
         return value
 
     @field_validator('provider')
@@ -221,7 +229,7 @@ async def translate(req: TranslateRequest, request: Request):
         charged = chars
     try:
         result = await translator.translate([i.model_dump() for i in req.items],
-                                           req.source_language, req.target_language, req.provider)
+                                           req.source_language, req.target_language, req.provider, req.tone)
     except TranslationError as exc:
         ai_budget.refund(charged)
         raise HTTPException(502, str(exc)) from exc
