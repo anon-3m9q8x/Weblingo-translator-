@@ -132,15 +132,15 @@ function myMemoryEmail(){
 async function myMemoryPart(part, source, target, signal){
   const email=myMemoryEmail();
   const url=`${MYMEMORY_URL}?q=${encodeURIComponent(part)}&langpair=${encodeURIComponent(`${source}|${target}`)}${email?`&de=${encodeURIComponent(email)}`:''}`;
-  for(let attempt=0; attempt<3; attempt++){
+  for(let attempt=0; attempt<4; attempt++){
     const res=await fetch(url,{signal,referrerPolicy:'no-referrer',credentials:'omit'});
-    if(res.status===429 || res.status>=500){ await sleep(800*(attempt+1)); continue; }
+    if(res.status===429 || res.status>=500){ await sleep(1200*2**attempt); continue; }
     if(!res.ok) throw new Error(`無料翻訳サービスがエラーを返しました（HTTP ${res.status}）。`);
     const data=await res.json();
     const raw=String((data.responseData&&data.responseData.translatedText)||'');
     if(data.quotaFinished || raw.startsWith('MYMEMORY WARNING')) throw new QuotaError('quota');
     const status=Number(data.responseStatus||200);
-    if(status===429){ await sleep(800*(attempt+1)); continue; }
+    if(status===429){ await sleep(1200*2**attempt); continue; }
     if(status!==200) throw new Error(String(data.responseDetails||'無料翻訳の利用制限に達しました。'));
     const text=data.responseData&&data.responseData.translatedText;
     if(!text) throw new Error('翻訳サービスから結果が返されませんでした。');
@@ -257,8 +257,8 @@ async function runTranslation(controller){
   markUntranslated(run.pending.map(b=>b.id), '「続きを翻訳」で翻訳できます');
   $('continueBtn').hidden=true;
   const batches=createBatches(included, provider==='free'?1350:4300, provider==='free'?7:10);
-  const parallel=provider==='free'?3:2;
-  let complete=0, failed=0, firstError='';
+  const parallel=2;
+  let complete=0, failed=0, firstError=''; const retry=[];
   setStatus(`翻訳中 · 0 / ${included.length} セクション`, 18);
   const workers=Array.from({length:Math.min(parallel,batches.length)},async(_,i)=>{
     for(let j=i;j<batches.length;j+=parallel){
@@ -271,7 +271,8 @@ async function runTranslation(controller){
         if(isAbort(err)) return;
         failed+=batch.length;
         if(!firstError) firstError=err.message;
-        markUntranslated(batch.map(x=>x.id), '翻訳できませんでした');
+        retry.push(...included.filter(b=>batch.some(x=>x.id===b.id)));
+        markUntranslated(batch.map(x=>x.id), '翻訳できませんでした（「続きを翻訳」で再試行できます）');
       }
       complete+=batch.length;
       setStatus(`翻訳中 · ${complete} / ${included.length} セクション`, 18+82*(complete/included.length));
@@ -280,10 +281,11 @@ async function runTranslation(controller){
   await Promise.all(workers);
   if(controller.signal.aborted) return;
   clearStatus();
+  run.pending=retry.concat(run.pending);
   const done=state.page.blocks.filter(b=>b.type!=='image' && state.translations.has(b.id)).length;
   $('translatedInfo').textContent=`${done} セクション翻訳済み`;
   updateContinueButton();
-  if(failed){showError(`${failed} セクションの翻訳に失敗しました。${firstError}`);}
+  if(failed){showError(`${failed} セクションの翻訳に失敗しました。少し待ってから「続きを翻訳」で再試行できます。（${firstError}）`);}
   else if(state.page.truncated){showError('ページが長すぎるため、後半の本文は取得していません。');}
 }
 async function continueTranslation(){
