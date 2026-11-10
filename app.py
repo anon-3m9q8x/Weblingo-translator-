@@ -28,7 +28,7 @@ from translation import TranslateService, TranslationError
 
 ROOT = Path(__file__).resolve().parent
 META_CHARSET = re.compile(rb'<meta[^>]+charset=["\']?\s*([A-Za-z0-9_\-:.]+)', re.I)
-MAX_HTML_BYTES = 2_000_000
+MAX_HTML_BYTES = 5_000_000
 
 
 def env_int(name: str, default: int) -> int:
@@ -43,6 +43,8 @@ APP_USERNAME = os.getenv('APP_USERNAME', 'weblingo')
 extract_limiter = RateLimiter(env_int('RATE_LIMIT_EXTRACT', 20), 600)      # pages / IP / 10 min
 translate_limiter = RateLimiter(env_int('RATE_LIMIT_TRANSLATE', 200), 600)  # requests / IP / 10 min
 ai_budget = DailyBudget(env_int('AI_DAILY_CHAR_LIMIT', 200_000))            # AI chars / day (all users)
+FREE_PAGE_CHAR_LIMIT = env_int('FREE_PAGE_CHAR_LIMIT', 20_000)   # free chars per translation run
+AI_PAGE_CHAR_LIMIT = env_int('AI_PAGE_CHAR_LIMIT', 100_000)      # AI chars per translation run
 fetch_slots = asyncio.Semaphore(env_int('MAX_CONCURRENT_FETCHES', 8))
 app = FastAPI(title='WebLingo - Website Translator', docs_url=None, redoc_url=None)
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
@@ -197,7 +199,7 @@ async def healthz():
 async def status():
     remaining = ai_budget.remaining()
     return {'ok': True, 'openai_available': bool(os.getenv('OPENAI_API_KEY')) and remaining != 0,
-            'max_free_chars': 4000, 'max_ai_chars': 30000, 'ai_daily_remaining': remaining}
+            'max_free_chars': FREE_PAGE_CHAR_LIMIT, 'max_ai_chars': AI_PAGE_CHAR_LIMIT, 'ai_daily_remaining': remaining}
 
 
 @app.post('/api/extract')

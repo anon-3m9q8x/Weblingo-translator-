@@ -59,6 +59,7 @@
             </div>
           </div>
         </form>
+        <details class="quota-settings"><summary>無料翻訳の1日の上限を増やす（任意）</summary><label class="quota-field"><span>メールアドレス</span><input id="mmEmail" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" aria-label="MyMemory用のメールアドレス"></label><p>入力すると無料翻訳（MyMemory）の上限が 1日約5,000文字 → 約50,000文字 になります。アドレスはこのブラウザにのみ保存され、翻訳時にMyMemoryへ直接送られます（このサイトのサーバーには送信されません）。</p></details>
         <div class="controls-bottom"><div id="engineHint" class="engine-hint"><span class="hint-info">ⓘ</span> 無料翻訳には公開APIを使用します。1日の利用上限があります。</div><div class="kbd-hint">Enter ↵ で翻訳</div></div>
       </section>
 
@@ -82,8 +83,8 @@
           <article class="reader-pane" id="originalPane"><header class="reader-head"><div class="reader-head-title"><div class="language-emblem emblem-original">EN</div><div><small>ORIGINAL</small><h3>原文</h3></div></div><div id="originalInfo" class="reader-head-meta">—</div></header><div id="originalBody" class="reader-body" tabindex="0"></div></article>
           <article class="reader-pane translated-pane" id="translatedPane"><header class="reader-head"><div class="reader-head-title"><div id="translatedEmblem" class="language-emblem emblem-translated">JA</div><div><small>TRANSLATION</small><h3>翻訳</h3></div></div><div id="translatedInfo" class="reader-head-meta">—</div></header><div id="translatedBody" class="reader-body" tabindex="0"></div></article>
         </div>
-        <p class="reading-note"><span>ⓘ</span> 読みやすさを優先して本文を再構成しています。ログイン必須ページ・JavaScriptで生成される内容・画像内の文字は翻訳できない場合があります。</p>
-      </section>
+        <div class="continue-row"><button id="continueBtn" class="main-button continue-button" type="button" hidden><span class="button-icon">↓</span><span id="continueLabel">続きを翻訳</span></button></div>
+        <p class="reading-note"><span>ⓘ</span> 読みやすさを優先して本文を再構成しています。ログイン必須ページ・JavaScriptで生成される内容・画像内の文字は翻訳できない場合があります。</p></section>
 
       <section id="historySection" class="history-section" hidden><div class="history-header"><h2>最近翻訳したURL</h2><button id="clearHistory" type="button">履歴を消去</button></div><div id="historyList" class="history-list"></div></section>
     </main>

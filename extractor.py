@@ -8,8 +8,8 @@ from bs4 import BeautifulSoup, Tag
 REMOVE_TAGS = 'script style noscript template iframe embed object form nav aside svg canvas video audio'.split()
 CANDIDATE_TAGS = set('h1 h2 h3 h4 h5 h6 p li blockquote pre figcaption th td'.split())
 ANCESTOR_BLOCKS = set('li blockquote pre th td'.split())
-MAX_BLOCKS = 220
-MAX_CHARS = 42000
+MAX_BLOCKS = 800
+MAX_CHARS = 150000
 MAX_BLOCK_CHARS = 3000  # keep each block below the /api/translate per-item limit
 
 

@@ -115,6 +115,9 @@ class TranslateService:
                     except (httpx.HTTPError, ValueError) as exc:
                         logger.warning('MyMemory request failed: %r', exc)
                         raise TranslationError('無料翻訳サービスに接続できません。時間をおいて再試行してください。') from exc
+                    if payload.get('quotaFinished') or str(payload.get('responseData', {}).get('translatedText', '')).startswith('MYMEMORY WARNING'):
+                        logger.warning('MyMemory daily quota exhausted for this server')
+                        raise TranslationError('無料翻訳の本日の利用上限に達しました（MYMEMORY_EMAIL を設定すると上限が増えます）。')
                     if int(payload.get('responseStatus', 200)) != 200:
                         raise TranslationError(str(payload.get('responseDetails') or '無料翻訳の利用制限に達しました。'))
                     translation = payload.get('responseData', {}).get('translatedText')

@@ -125,13 +125,20 @@ function splitUtf8(text, maxBytes=480){
   return out;
 }
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+class QuotaError extends Error {}
+function myMemoryEmail(){
+  try { const v=(localStorage.getItem('webLingoMyMemoryEmail')||'').trim(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)?v:''; } catch(_) { return ''; }
+}
 async function myMemoryPart(part, source, target, signal){
-  const url=`${MYMEMORY_URL}?q=${encodeURIComponent(part)}&langpair=${encodeURIComponent(`${source}|${target}`)}`;
+  const email=myMemoryEmail();
+  const url=`${MYMEMORY_URL}?q=${encodeURIComponent(part)}&langpair=${encodeURIComponent(`${source}|${target}`)}${email?`&de=${encodeURIComponent(email)}`:''}`;
   for(let attempt=0; attempt<3; attempt++){
     const res=await fetch(url,{signal,referrerPolicy:'no-referrer',credentials:'omit'});
     if(res.status===429 || res.status>=500){ await sleep(800*(attempt+1)); continue; }
     if(!res.ok) throw new Error(`無料翻訳サービスがエラーを返しました（HTTP ${res.status}）。`);
     const data=await res.json();
+    const raw=String((data.responseData&&data.responseData.translatedText)||'');
+    if(data.quotaFinished || raw.startsWith('MYMEMORY WARNING')) throw new QuotaError('quota');
     const status=Number(data.responseStatus||200);
     if(status===429){ await sleep(800*(attempt+1)); continue; }
     if(status!==200) throw new Error(String(data.responseDetails||'無料翻訳の利用制限に達しました。'));
@@ -162,9 +169,13 @@ function applyTone(translations, target, provider){
 }
 async function translateBatch(batch, source, target, provider, signal){
   const tone=$('tone').value;
-  if(provider==='free'){
+  if(provider==='free' && !state.browserQuotaOut){
     try { return applyTone(await translateFreeInBrowser(batch, source, target, signal), target, provider); }
-    catch(err){ if(isAbort(err)) throw err; /* fall back to the server below */ }
+    catch(err){
+      if(isAbort(err)) throw err;
+      if(err instanceof QuotaError) state.browserQuotaOut=true; // this browser's daily quota is used up -> server for the rest
+      /* fall back to the server below */
+    }
   }
   const data=await postJson('/api/translate', {items:batch,source_language:source,target_language:target,provider,tone},signal);
   return applyTone(data.translations, target, provider);
@@ -186,8 +197,7 @@ async function translatePage(event){
   if (event) event.preventDefault();
   if(state.abort) state.abort.abort();
   const controller=new AbortController(); state.abort=controller;
-  clearError(); busy(true); state.translations.clear();
-  let count=0;
+  clearError(); busy(true); state.translations.clear(); state.run=null; $('continueBtn').hidden=true;
   try {
     const url=normalizeUrl($('urlInput').value);
     $('urlInput').value=url;
@@ -204,47 +214,86 @@ async function translatePage(event){
       if(!LANG_NAMES[source]) source='en';
     }
     const target=$('targetLang').value;
-    const maxChars=provider==='free'?state.freeLimit:state.aiLimit;
-    let included=[],total=0, skipped=[];
+    // blocks that need no translation (code, numbers/symbols only) keep the original text and use no quota
+    const pending=[];
     for(const block of page.blocks){
       if(block.type==='image') continue;
-      if(total+block.text.length<=maxChars){included.push(block);total+=block.text.length;}
-      else skipped.push(block.id);
+      if(block.type==='code' || !/\p{L}/u.test(block.text)) applyTranslation({id:block.id, text:block.text});
+      else pending.push(block);
     }
-    if(skipped.length) markUntranslated(skipped, provider==='free' ? '翻訳対象の文字数上限を超えました。AI翻訳をご利用ください。' : '1ページあたりの翻訳上限を超えたため未翻訳です。');
-    if(!included.length) throw new Error('翻訳対象の文章が見つかりませんでした。');
-    const batches=createBatches(included, provider==='free'?1350:4300, provider==='free'?7:10);
-    let complete=0, failed=0, firstError='';
-    setStatus(`翻訳中 · 0 / ${included.length} セクション`, 18);
-    const workers=Array.from({length:Math.min(2,batches.length)},async(_,i)=>{
-      for(let j=i;j<batches.length;j+=2){
-        if(controller.signal.aborted) return;
-        const batch=batches[j];
-        try {
-          const translations=await translateBatch(batch, source, target, provider, controller.signal);
-          translations.forEach(applyTranslation);
-          count+=translations.length;
-        } catch(err){
-          if(isAbort(err)) return;
-          failed+=batch.length;
-          if(!firstError) firstError=err.message;
-          markUntranslated(batch.map(x=>x.id), '翻訳できませんでした');
-        }
-        complete+=batch.length;
-        setStatus(`翻訳中 · ${complete} / ${included.length} セクション`, 18+82*(complete/included.length));
-      }
-    });
-    await Promise.all(workers);
-    if(controller.signal.aborted) return;
-    clearStatus();
-    if(failed){showError(`${failed} セクションの翻訳に失敗しました。${firstError}`);}
-    else if(skipped.length || page.truncated){showError(provider==='free' ? '一部の文章は文字数・取得サイズの上限を超えたため翻訳していません。AI翻訳なら多くの文章を翻訳できます。' : '一部の文章は文字数・取得サイズの上限を超えたため翻訳していません。');}
-    $('translatedInfo').textContent=`${count} セクション翻訳済み`;
+    if(!pending.length) throw new Error('翻訳対象の文章が見つかりませんでした。');
+    state.run={source, target, provider, pending};
+    await runTranslation(controller);
   } catch(err) {
     if(!isAbort(err)) {clearStatus(); showError(err.message || 'エラーが発生しました。');}
   } finally {
     if(state.abort===controller){state.abort=null;busy(false);clearStatus();}
   }
+}
+function pickRun(blocks, maxChars){
+  // identical texts are translated once, so they count once toward the limit
+  const seen=new Set(); const included=[]; let total=0;
+  for(const block of blocks){
+    const cost=seen.has(block.text)?0:block.text.length;
+    if(included.length && total+cost>maxChars) break;
+    included.push(block); total+=cost; seen.add(block.text);
+  }
+  return included;
+}
+function updateContinueButton(){
+  const run=state.run; const btn=$('continueBtn');
+  const rest=run?run.pending.length:0;
+  btn.hidden=!rest;
+  if(rest){
+    const chars=run.pending.reduce((n,b)=>n+b.text.length,0);
+    $('continueLabel').textContent=`続きを翻訳（残り ${rest} セクション・約${chars.toLocaleString()}文字）`;
+  }
+}
+async function runTranslation(controller){
+  const run=state.run; const {source,target,provider}=run;
+  const maxChars=provider==='free'?state.freeLimit:state.aiLimit;
+  const included=pickRun(run.pending, maxChars);
+  run.pending=run.pending.slice(included.length);
+  markUntranslated(run.pending.map(b=>b.id), '「続きを翻訳」で翻訳できます');
+  $('continueBtn').hidden=true;
+  const batches=createBatches(included, provider==='free'?1350:4300, provider==='free'?7:10);
+  const parallel=provider==='free'?3:2;
+  let complete=0, failed=0, firstError='';
+  setStatus(`翻訳中 · 0 / ${included.length} セクション`, 18);
+  const workers=Array.from({length:Math.min(parallel,batches.length)},async(_,i)=>{
+    for(let j=i;j<batches.length;j+=parallel){
+      if(controller.signal.aborted) return;
+      const batch=batches[j];
+      try {
+        const translations=await translateBatch(batch, source, target, provider, controller.signal);
+        translations.forEach(applyTranslation);
+      } catch(err){
+        if(isAbort(err)) return;
+        failed+=batch.length;
+        if(!firstError) firstError=err.message;
+        markUntranslated(batch.map(x=>x.id), '翻訳できませんでした');
+      }
+      complete+=batch.length;
+      setStatus(`翻訳中 · ${complete} / ${included.length} セクション`, 18+82*(complete/included.length));
+    }
+  });
+  await Promise.all(workers);
+  if(controller.signal.aborted) return;
+  clearStatus();
+  const done=state.page.blocks.filter(b=>b.type!=='image' && state.translations.has(b.id)).length;
+  $('translatedInfo').textContent=`${done} セクション翻訳済み`;
+  updateContinueButton();
+  if(failed){showError(`${failed} セクションの翻訳に失敗しました。${firstError}`);}
+  else if(state.page.truncated){showError('ページが長すぎるため、後半の本文は取得していません。');}
+}
+async function continueTranslation(){
+  if(!state.run || !state.run.pending.length) return;
+  if(state.abort) state.abort.abort();
+  const controller=new AbortController(); state.abort=controller;
+  clearError(); busy(true);
+  try { await runTranslation(controller); }
+  catch(err){ if(!isAbort(err)) showError(err.message||'エラーが発生しました。'); }
+  finally { if(state.abort===controller){state.abort=null;busy(false);clearStatus();} }
 }
 function translatedText(){
   if(!state.page) return '';
@@ -280,6 +329,13 @@ async function init(){
     $('targetLang').value=oldSource==='auto'?'en':oldSource;
   });
   $('provider').addEventListener('change',updateEngineHint);
+  $('continueBtn').addEventListener('click',continueTranslation);
+  try { $('mmEmail').value=localStorage.getItem('webLingoMyMemoryEmail')||''; } catch(_){}
+  $('mmEmail').addEventListener('change',()=>{
+    const v=$('mmEmail').value.trim();
+    try { v?localStorage.setItem('webLingoMyMemoryEmail',v):localStorage.removeItem('webLingoMyMemoryEmail'); } catch(_){}
+    state.browserQuotaOut=false; updateEngineHint();
+  });
   try { const savedTone=localStorage.getItem('webLingoTone'); if(savedTone==='casual'||savedTone==='polite') $('tone').value=savedTone; } catch(_){}
   $('tone').addEventListener('change',()=>{ try{localStorage.setItem('webLingoTone',$('tone').value);}catch(_){} });
   $('copyBtn').addEventListener('click',copyText);
@@ -305,6 +361,6 @@ function updateEngineHint(){
   const aiOption=$('provider').querySelector('option[value="openai"]');
   aiOption.textContent=state.openai?'AI翻訳（高品質）':'AI翻訳（未設定）';
   const remain=typeof state.aiRemaining==='number'?` 本日の残り約${state.aiRemaining.toLocaleString()}文字。`:'';
-  $('engineHint').textContent=isAI ? (state.openai?`ⓘ AI翻訳が利用できます。${remain}`:'ⓘ AI翻訳はこのサーバーでは利用できません（APIキー未設定または本日の上限到達）。無料翻訳をご利用ください。') : 'ⓘ 無料翻訳はMyMemory公開APIを使用します。1日あたりの利用上限があります。';
+  $('engineHint').textContent=isAI ? (state.openai?`ⓘ AI翻訳が利用できます。${remain}`:'ⓘ AI翻訳はこのサーバーでは利用できません（APIキー未設定または本日の上限到達）。無料翻訳をご利用ください。') : `ⓘ 無料翻訳はMyMemory公開APIを使用します。1回 約${state.freeLimit.toLocaleString()}文字まで（続きも翻訳可）。1日の上限は${myMemoryEmail()?'約50,000':'約5,000'}文字です。`;
 }
 init();
