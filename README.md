@@ -1,5 +1,9 @@
 # WebLingo — URLでWebサイトを翻訳するアプリ
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/anon-3m9q8x/Weblingo-translator-)
+
+↑ ボタンを押して Render にログイン（GitHubアカウントで可）→「Apply」で、`https://〜.onrender.com` の公開URLが発行されます（無料プラン）。
+
 任意の **公開WebページのURL** を入力すると、ページのHTMLから主要テキストを抽出し、原文と翻訳文を左右に並べて読めるWebアプリです。スマホでは「原文 / 翻訳」の切り替え表示になります。
 
 ## 1. 起動方法
