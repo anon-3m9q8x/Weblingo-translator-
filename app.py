@@ -111,8 +111,10 @@ async def retrieve_html(url: str) -> tuple[str, str]:
     current_url = parse_public_url(url)
     # trust_env=False: never route user-supplied URLs through env proxies (keeps IP pinning intact)
     async with httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=httpx.Timeout(18.0), headers={
-        'User-Agent': 'Mozilla/5.0 (compatible; WebLingoReader/1.0; +https://example.org)',
-        'Accept': 'text/html,application/xhtml+xml',
+        # honest, identifiable reader UA (no browser impersonation)
+        'User-Agent': 'WebLingoReader/1.1 (+https://github.com/anon-3m9q8x/Weblingo-translator-)',
+        'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
+        'Accept-Language': 'ja,en;q=0.8',
     }) as client:
         for _ in range(5):
             ip = assert_public_dns(current_url)
@@ -125,6 +127,9 @@ async def retrieve_html(url: str) -> tuple[str, str]:
                         raise HTTPException(400, 'リダイレクト先が取得できません。')
                     current_url = parse_public_url(urljoin(current_url, location))
                     continue
+                if response.status_code in (401, 403, 429, 451, 503):
+                    raise HTTPException(422, f'対象サイトがこのサーバーからの自動取得を拒否しました（HTTP {response.status_code}）。'
+                                             'ブラウザでページを開いて本文をコピーし、「本文を貼り付けて翻訳」をご利用ください。')
                 if response.status_code >= 400:
                     raise HTTPException(422, f'対象サイトから HTTP {response.status_code} が返されました。')
                 content_type = response.headers.get('content-type', '').lower()
@@ -134,7 +139,7 @@ async def retrieve_html(url: str) -> tuple[str, str]:
                 async for chunk in response.aiter_bytes():
                     body += chunk
                     if len(body) > MAX_HTML_BYTES:
-                        raise HTTPException(413, 'ページのサイズが上限（2MB）を超えています。')
+                        raise HTTPException(413, f'ページのサイズが上限（{MAX_HTML_BYTES // 1_000_000}MB）を超えています。')
                 return decode_html(bytes(body), response.charset_encoding), current_url
     raise HTTPException(400, 'リダイレクトが多すぎるため中断しました。')
 

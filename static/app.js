@@ -69,8 +69,9 @@ function createBlock(block, translated = false){
 function renderReader(page){
   $('welcomePanel').hidden = true;
   $('resultPanel').hidden = false;
-  $('pageTitle').textContent = page.title || new URL(page.url).hostname;
-  $('pageLink').href = page.url;
+  $('pageTitle').textContent = page.title || (page.url ? new URL(page.url).hostname : '貼り付けた文章');
+  $('pageLink').hidden = !page.url;
+  if (page.url) $('pageLink').href = page.url;
   $('originalInfo').textContent = `${page.blocks.length} セクション`;
   $('translatedInfo').textContent = `${LANG_NAMES[$('targetLang').value] || $('targetLang').value}に翻訳`;
   const originalLang = $('sourceLang').value !== 'auto' ? $('sourceLang').value : page.detected_language;
@@ -221,8 +222,17 @@ async function translatePage(event){
     setStatus('Webページを取得しています…', 8);
     const page=await postJson('/api/extract', {url}, controller.signal);
     if (controller.signal.aborted) return;
-    if (!page.blocks.length) throw new Error('本文テキストを検出できませんでした。JavaScriptで描画されるサイトの可能性があります。');
-    state.page=page; renderReader(page); storeHistory(page.url,page.title);
+    if (!page.blocks.length) throw new Error('本文テキストを検出できませんでした。JavaScriptで描画されるサイトの可能性があります。「本文を貼り付けて翻訳」もお試しください。');
+    storeHistory(page.url,page.title);
+    await startPage(page, controller);
+  } catch(err) {
+    if(!isAbort(err)) {clearStatus(); showError(err.message || 'エラーが発生しました。'); if(/拒否|検出できません|JavaScript/.test(err.message||'')) offerPasteMode();}
+  } finally {
+    if(state.abort===controller){state.abort=null;busy(false);clearStatus();}
+  }
+}
+async function startPage(page, controller){
+    state.page=page; renderReader(page);
     const provider=$('provider').value;
     let source=$('sourceLang').value;
     if(source==='auto'){
@@ -241,11 +251,56 @@ async function translatePage(event){
     if(!pending.length) throw new Error('翻訳対象の文章が見つかりませんでした。');
     state.run={source, target, provider, pending};
     await runTranslation(controller);
-  } catch(err) {
-    if(!isAbort(err)) {clearStatus(); showError(err.message || 'エラーが発生しました。');}
-  } finally {
-    if(state.abort===controller){state.abort=null;busy(false);clearStatus();}
+}
+// ---- Paste mode: for sites that refuse automated access, the visitor copies the text in their own browser ----
+function offerPasteMode(){
+  const box=$('pasteMode'); box.open=true;
+  box.scrollIntoView({behavior:'smooth', block:'center'});
+}
+function guessLanguage(text){
+  const sample=text.slice(0,4000);
+  const count=(re)=>(sample.match(re)||[]).length;
+  if(count(/[\u3040-\u30ff]/g)>20) return 'ja';
+  if(count(/[\uac00-\ud7af]/g)>20) return 'ko';
+  if(count(/[\u4e00-\u9fff]/g)>20) return 'zh';
+  if(count(/[\u0400-\u04ff]/g)>40) return 'ru';
+  if(count(/[\u0600-\u06ff]/g)>40) return 'ar';
+  return 'en';
+}
+function splitLong(text, limit=3000){
+  const out=[];
+  while(text.length>limit){
+    const win=text.slice(0,limit);
+    let cut=Math.max(win.lastIndexOf('. '),win.lastIndexOf('。'),win.lastIndexOf('! '),win.lastIndexOf('? '));
+    if(cut<limit/3) cut=win.lastIndexOf(' ');
+    cut = cut>=limit/3 ? cut+1 : limit;
+    out.push(text.slice(0,cut).trim()); text=text.slice(cut).trim();
   }
+  if(text) out.push(text);
+  return out;
+}
+function buildPastedPage(raw){
+  const text=raw.replace(/\r\n?/g,'\n').replace(/[\t\u00a0]+/g,' ').slice(0,150000);
+  // paragraphs: blank-line separated when available, otherwise one per line
+  const chunks=(/\n\s*\n/.test(text)?text.split(/\n\s*\n/):text.split('\n')).map(t=>t.replace(/\s*\n\s*/g,' ').trim()).filter(Boolean);
+  const blocks=[];
+  chunks.forEach((chunk,i)=>{
+    const looksHeading=chunk.length<=60 && !/[。．.!?！？:：,、;]$/.test(chunk) && i<chunks.length-1 && chunks[i+1].length>chunk.length;
+    if(looksHeading) blocks.push({id:`p${blocks.length}`, type:'heading', level:blocks.length?3:2, text:chunk});
+    else splitLong(chunk).forEach(part=>blocks.push({id:`p${blocks.length}`, type:'text', text:part}));
+  });
+  const first=chunks[0]||'貼り付けた文章';
+  return {title:first.length>70?`${first.slice(0,70)}…`:first, url:'', blocks, detected_language:guessLanguage(text), truncated:raw.length>150000, total_chars:text.length};
+}
+async function translatePasted(){
+  const raw=$('pasteText').value;
+  if(!raw.trim()){ showError('翻訳したい文章を貼り付けてください。'); return; }
+  if(state.abort) state.abort.abort();
+  const controller=new AbortController(); state.abort=controller;
+  clearError(); busy(true); state.translations.clear(); state.run=null; $('continueBtn').hidden=true;
+  try { await startPage(buildPastedPage(raw), controller); $('resultPanel').scrollIntoView({behavior:'smooth'}); }
+  catch(err){ if(!isAbort(err)){ clearStatus(); showError(err.message||'エラーが発生しました。'); } }
+  finally { if(state.abort===controller){state.abort=null;busy(false);clearStatus();} }
 }
 function pickRun(blocks, maxChars){
   // identical texts are translated once, so they count once toward the limit
@@ -354,6 +409,8 @@ async function init(){
   });
   $('provider').addEventListener('change',updateEngineHint);
   $('continueBtn').addEventListener('click',continueTranslation);
+  $('pasteTranslateBtn').addEventListener('click',translatePasted);
+  $('pasteText').addEventListener('input',()=>{ $('pasteCount').textContent=`${$('pasteText').value.length.toLocaleString()} 文字`; });
   try { $('mmEmail').value=localStorage.getItem('webLingoMyMemoryEmail')||''; } catch(_){}
   $('mmEmail').addEventListener('change',()=>{
     const v=$('mmEmail').value.trim();

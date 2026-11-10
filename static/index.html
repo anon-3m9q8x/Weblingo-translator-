@@ -59,6 +59,7 @@
             </div>
           </div>
         </form>
+        <details id="pasteMode" class="paste-mode"><summary>URLで取得できないときは：本文を貼り付けて翻訳</summary><p>アクセス制限のあるサイト（HTTP 403 など）は、ブラウザでページを開いて本文を選択・コピーし、ここに貼り付けてください。</p><textarea id="pasteText" rows="7" maxlength="150000" placeholder="ここに翻訳したい文章を貼り付け" aria-label="翻訳する文章"></textarea><div class="paste-actions"><span id="pasteCount">0 文字</span><button id="pasteTranslateBtn" class="main-button paste-button" type="button"><span class="button-icon">↗</span><span>貼り付けた文章を翻訳</span></button></div></details>
         <details class="quota-settings"><summary>無料翻訳の1日の上限を増やす（任意）</summary><label class="quota-field"><span>メールアドレス</span><input id="mmEmail" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" aria-label="MyMemory用のメールアドレス"></label><p>入力すると無料翻訳（MyMemory）の上限が 1日約5,000文字 → 約50,000文字 になります。アドレスはこのブラウザにのみ保存され、翻訳時にMyMemoryへ直接送られます（このサイトのサーバーには送信されません）。</p></details>
         <div class="controls-bottom"><div id="engineHint" class="engine-hint"><span class="hint-info">ⓘ</span> 無料翻訳には公開APIを使用します。1日の利用上限があります。</div><div class="kbd-hint">Enter ↵ で翻訳</div></div>
       </section>
