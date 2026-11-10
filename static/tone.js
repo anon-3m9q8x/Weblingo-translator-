@@ -87,6 +87,7 @@
   RULES.push([new RegExp(ER + 'ません' + PARTICLE + END, 'g'), '$1ない$2']);
   RULES.push([new RegExp(ER + 'ました' + PARTICLE + END, 'g'), '$1た$2']);
   RULES.push([new RegExp(ER + 'ます' + PARTICLE + END, 'g'), '$1る$2']);
+  RULES.push([new RegExp(ER + 'ましょう' + PARTICLE + END, 'g'), '$1よう$2']); // 始めましょう -> 始めよう
   // suru verbs: 使用します / 確認しました (only after kanji/katakana or the hiragana と/に/を/く)
   const SURU = '([\\u4e00-\\u9fff\\u30a0-\\u30ffとにをくう])し';
   RULES.push([new RegExp(SURU + 'ませんでした' + PARTICLE + END, 'g'), '$1しなかった$2']);
