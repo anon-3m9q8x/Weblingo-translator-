@@ -52,7 +52,7 @@ def test_site_and_status():
     assert 'WebLingo' in client.get('/').text
     response=client.get('/api/status')
     assert response.status_code == 200
-    assert response.json()['max_free_chars']==4000
+    assert response.json()['max_free_chars']==20000 and response.json()['max_ai_chars']==100000
     assert client.post('/api/extract', json={'url':'http://127.0.0.1'}).status_code == 400
 
 
@@ -216,3 +216,9 @@ def test_ai_prompt_includes_tone(monkeypatch):
     out = asyncio.run(translation.TranslateService().translate([{'id': 'b0', 'text': 'Hi'}], 'en', 'ja', 'openai', 'casual'))
     assert out == [{'id': 'b0', 'text': 'やあ'}]
     assert 'conversational' in captured['system'] and 'です・ます' in captured['system']
+
+
+def test_extractor_handles_long_pages():
+    paras = ''.join(f'<p>Paragraph {i} ' + 'word ' * 60 + '</p>' for i in range(500))
+    result = extract_page(f'<html><body><main>{paras}</main></body></html>', 'https://example.com')
+    assert len(result['blocks']) == 500 and not result['truncated']
