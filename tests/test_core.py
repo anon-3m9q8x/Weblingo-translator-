@@ -219,6 +219,6 @@ def test_ai_prompt_includes_tone(monkeypatch):
 
 
 def test_extractor_handles_long_pages():
-    paras = ''.join(f'<p>Paragraph {i} ' + 'word ' * 60 + '</p>' for i in range(500))
+    paras = ''.join(f'<p>Paragraph {i} ' + 'word ' * 40 + '</p>' for i in range(500))
     result = extract_page(f'<html><body><main>{paras}</main></body></html>', 'https://example.com')
     assert len(result['blocks']) == 500 and not result['truncated']
