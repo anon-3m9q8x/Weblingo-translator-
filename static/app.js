@@ -126,6 +126,13 @@ function splitUtf8(text, maxBytes=480){
 }
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 class QuotaError extends Error {}
+function quotaError(body){
+  // MyMemory: "... NEXT AVAILABLE IN 00 HOURS 24 MINUTES 54 SECONDS ..."
+  const m=/NEXT AVAILABLE IN\s+(\d+)\s+HOURS?\s+(\d+)\s+MINUTES?/i.exec(body||'');
+  const wait=m?(Number(m[1])*60+Number(m[2])):60;
+  const err=new QuotaError(m?`約${Number(m[1])?`${Number(m[1])}時間`:''}${Number(m[2])}分後に回復します`:'しばらくすると回復します');
+  err.waitMs=(wait+1)*60000; return err;
+}
 function myMemoryEmail(){
   try { const v=(localStorage.getItem('webLingoMyMemoryEmail')||'').trim(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)?v:''; } catch(_) { return ''; }
 }
@@ -134,11 +141,15 @@ async function myMemoryPart(part, source, target, signal){
   const url=`${MYMEMORY_URL}?q=${encodeURIComponent(part)}&langpair=${encodeURIComponent(`${source}|${target}`)}${email?`&de=${encodeURIComponent(email)}`:''}`;
   for(let attempt=0; attempt<4; attempt++){
     const res=await fetch(url,{signal,referrerPolicy:'no-referrer',credentials:'omit'});
-    if(res.status===429 || res.status>=500){ await sleep(1200*2**attempt); continue; }
+    if(res.status===429 || res.status>=500){
+      const body=await res.text().catch(()=> '');
+      if(body.includes('MYMEMORY WARNING')) throw quotaError(body); // daily quota used up: retrying is pointless
+      await sleep(1200*2**attempt); continue;
+    }
     if(!res.ok) throw new Error(`無料翻訳サービスがエラーを返しました（HTTP ${res.status}）。`);
     const data=await res.json();
     const raw=String((data.responseData&&data.responseData.translatedText)||'');
-    if(data.quotaFinished || raw.startsWith('MYMEMORY WARNING')) throw new QuotaError('quota');
+    if(data.quotaFinished || raw.startsWith('MYMEMORY WARNING')) throw quotaError(raw);
     const status=Number(data.responseStatus||200);
     if(status===429){ await sleep(1200*2**attempt); continue; }
     if(status!==200) throw new Error(String(data.responseDetails||'無料翻訳の利用制限に達しました。'));
@@ -169,16 +180,22 @@ function applyTone(translations, target, provider){
 }
 async function translateBatch(batch, source, target, provider, signal){
   const tone=$('tone').value;
-  if(provider==='free' && !state.browserQuotaOut){
+  const quotaOut=provider==='free' && Date.now()<(state.quotaUntil||0);
+  if(provider==='free' && !quotaOut){
     try { return applyTone(await translateFreeInBrowser(batch, source, target, signal), target, provider); }
     catch(err){
       if(isAbort(err)) throw err;
-      if(err instanceof QuotaError) state.browserQuotaOut=true; // this browser's daily quota is used up -> server for the rest
+      if(err instanceof QuotaError){ state.quotaUntil=Date.now()+err.waitMs; state.quotaMessage=err.message; }
       /* fall back to the server below */
     }
   }
-  const data=await postJson('/api/translate', {items:batch,source_language:source,target_language:target,provider,tone},signal);
-  return applyTone(data.translations, target, provider);
+  try {
+    const data=await postJson('/api/translate', {items:batch,source_language:source,target_language:target,provider,tone},signal);
+    return applyTone(data.translations, target, provider);
+  } catch(err){
+    if(!isAbort(err) && provider==='free' && Date.now()<(state.quotaUntil||0)) throw new QuotaError(state.quotaMessage||'しばらくすると回復します');
+    throw err;
+  }
 }
 async function postJson(path, body, signal){
   const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal});
@@ -258,17 +275,19 @@ async function runTranslation(controller){
   $('continueBtn').hidden=true;
   const batches=createBatches(included, provider==='free'?1350:4300, provider==='free'?7:10);
   const parallel=2;
-  let complete=0, failed=0, firstError=''; const retry=[];
+  let complete=0, failed=0, firstError='', quotaHit=null; const retry=[];
   setStatus(`翻訳中 · 0 / ${included.length} セクション`, 18);
   const workers=Array.from({length:Math.min(parallel,batches.length)},async(_,i)=>{
     for(let j=i;j<batches.length;j+=parallel){
       if(controller.signal.aborted) return;
       const batch=batches[j];
+      if(quotaHit){ retry.push(...included.filter(b=>batch.some(x=>x.id===b.id))); continue; }
       try {
         const translations=await translateBatch(batch, source, target, provider, controller.signal);
         translations.forEach(applyTranslation);
       } catch(err){
         if(isAbort(err)) return;
+        if(err instanceof QuotaError){ quotaHit=err; retry.push(...included.filter(b=>batch.some(x=>x.id===b.id))); continue; }
         failed+=batch.length;
         if(!firstError) firstError=err.message;
         retry.push(...included.filter(b=>batch.some(x=>x.id===b.id)));
@@ -281,11 +300,14 @@ async function runTranslation(controller){
   await Promise.all(workers);
   if(controller.signal.aborted) return;
   clearStatus();
-  run.pending=retry.concat(run.pending);
+  const order=new Map(state.page.blocks.map((b,i)=>[b.id,i]));
+  run.pending=retry.concat(run.pending).sort((a,b)=>order.get(a.id)-order.get(b.id));
+  if(quotaHit) markUntranslated(retry.map(b=>b.id), '無料翻訳の上限のため未翻訳（「続きを翻訳」で再開できます）');
   const done=state.page.blocks.filter(b=>b.type!=='image' && state.translations.has(b.id)).length;
   $('translatedInfo').textContent=`${done} セクション翻訳済み`;
   updateContinueButton();
-  if(failed){showError(`${failed} セクションの翻訳に失敗しました。少し待ってから「続きを翻訳」で再試行できます。（${firstError}）`);}
+  if(quotaHit){showError(`本日の無料翻訳の上限に達しました（${quotaHit.message}）。「無料翻訳の1日の上限を増やす」にメールアドレスを入れると上限が約10倍になります。回復後に「続きを翻訳」で再開できます。`);}
+  else if(failed){showError(`${failed} セクションの翻訳に失敗しました。少し待ってから「続きを翻訳」で再試行できます。（${firstError}）`);}
   else if(state.page.truncated){showError('ページが長すぎるため、後半の本文は取得していません。');}
 }
 async function continueTranslation(){
@@ -336,7 +358,7 @@ async function init(){
   $('mmEmail').addEventListener('change',()=>{
     const v=$('mmEmail').value.trim();
     try { v?localStorage.setItem('webLingoMyMemoryEmail',v):localStorage.removeItem('webLingoMyMemoryEmail'); } catch(_){}
-    state.browserQuotaOut=false; updateEngineHint();
+    state.quotaUntil=0; updateEngineHint();
   });
   try { const savedTone=localStorage.getItem('webLingoTone'); if(savedTone==='casual'||savedTone==='polite') $('tone').value=savedTone; } catch(_){}
   $('tone').addEventListener('change',()=>{ try{localStorage.setItem('webLingoTone',$('tone').value);}catch(_){} });

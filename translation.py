@@ -104,6 +104,9 @@ class TranslateService:
                             params['de'] = os.getenv('MYMEMORY_EMAIL')
                         for attempt in range(3):
                             resp = await client.get(MYMEMORY_URL, params=params)
+                            if 'MYMEMORY WARNING' in resp.text:
+                                logger.warning('MyMemory daily quota exhausted for this server')
+                                raise TranslationError('無料翻訳の本日の利用上限に達しました（MYMEMORY_EMAIL を設定すると上限が増えます）。')
                             if resp.status_code == 429 or resp.status_code >= 500:
                                 await asyncio.sleep(0.8 * (attempt + 1))
                                 continue
