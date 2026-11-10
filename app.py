@@ -169,7 +169,7 @@ async def security_headers(request: Request, call_next):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Content-Security-Policy'] = (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' https: data:; connect-src 'self'; object-src 'none'; "
+        "img-src 'self' https: data:; connect-src 'self' https://api.mymemory.translated.net; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'"
     )
     return response

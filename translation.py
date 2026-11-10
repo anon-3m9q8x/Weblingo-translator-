@@ -5,12 +5,14 @@ import asyncio
 import hashlib
 import html
 import json
+import logging
 import os
 import time
 from collections import OrderedDict
 
 import httpx
 
+logger = logging.getLogger('weblingo.translation')
 MYMEMORY_URL = 'https://api.mymemory.translated.net/get'
 OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 
@@ -89,10 +91,18 @@ class TranslateService:
                         params = {'q': part, 'langpair': f'{src}|{target}'}
                         if os.getenv('MYMEMORY_EMAIL'):
                             params['de'] = os.getenv('MYMEMORY_EMAIL')
-                        resp = await client.get(MYMEMORY_URL, params=params)
-                        resp.raise_for_status()
+                        for attempt in range(3):
+                            resp = await client.get(MYMEMORY_URL, params=params)
+                            if resp.status_code == 429 or resp.status_code >= 500:
+                                await asyncio.sleep(0.8 * (attempt + 1))
+                                continue
+                            break
+                        if resp.status_code >= 400:
+                            logger.warning('MyMemory HTTP %s: %s', resp.status_code, resp.text[:200])
+                            raise TranslationError(f'無料翻訳サービスがエラーを返しました（HTTP {resp.status_code}）。時間をおいて再試行してください。')
                         payload = resp.json()
                     except (httpx.HTTPError, ValueError) as exc:
+                        logger.warning('MyMemory request failed: %r', exc)
                         raise TranslationError('無料翻訳サービスに接続できません。時間をおいて再試行してください。') from exc
                     if int(payload.get('responseStatus', 200)) != 200:
                         raise TranslationError(str(payload.get('responseDetails') or '無料翻訳の利用制限に達しました。'))

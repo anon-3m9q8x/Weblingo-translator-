@@ -105,6 +105,64 @@ function createBatches(blocks, maxBatchChars = 1800, maxBatchItems = 9){
   }
   flush(); return batches;
 }
+// ---- Free translation directly from the browser (each visitor uses their own MyMemory quota / IP) ----
+const MYMEMORY_URL='https://api.mymemory.translated.net/get';
+const freeCache=new Map();
+const utf8Len=(t)=>new TextEncoder().encode(t).length;
+function splitUtf8(text, maxBytes=480){
+  text=text.trim();
+  if(utf8Len(text)<=maxBytes) return [text];
+  const out=[]; let chunk='';
+  for(const word of text.split(' ')){
+    const piece=(chunk?' ':'')+word;
+    if(utf8Len(word)>maxBytes){
+      if(chunk){out.push(chunk);chunk='';}
+      for(const ch of word){ if(utf8Len(chunk+ch)>maxBytes){out.push(chunk);chunk='';} chunk+=ch; }
+    } else if(utf8Len(chunk+piece)>maxBytes){ out.push(chunk); chunk=word; }
+    else chunk+=piece;
+  }
+  if(chunk) out.push(chunk);
+  return out;
+}
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+async function myMemoryPart(part, source, target, signal){
+  const url=`${MYMEMORY_URL}?q=${encodeURIComponent(part)}&langpair=${encodeURIComponent(`${source}|${target}`)}`;
+  for(let attempt=0; attempt<3; attempt++){
+    const res=await fetch(url,{signal,referrerPolicy:'no-referrer',credentials:'omit'});
+    if(res.status===429 || res.status>=500){ await sleep(800*(attempt+1)); continue; }
+    if(!res.ok) throw new Error(`無料翻訳サービスがエラーを返しました（HTTP ${res.status}）。`);
+    const data=await res.json();
+    const status=Number(data.responseStatus||200);
+    if(status===429){ await sleep(800*(attempt+1)); continue; }
+    if(status!==200) throw new Error(String(data.responseDetails||'無料翻訳の利用制限に達しました。'));
+    const text=data.responseData&&data.responseData.translatedText;
+    if(!text) throw new Error('翻訳サービスから結果が返されませんでした。');
+    const box=document.createElement('textarea'); box.innerHTML=text; return box.value; // unescape HTML entities safely
+  }
+  throw new Error('無料翻訳サービスが混雑しています。時間をおいて再試行してください。');
+}
+async function translateFreeInBrowser(items, source, target, signal){
+  if(source===target) return items.map(x=>({id:x.id,text:x.text}));
+  const results=[];
+  for(const item of items){
+    const key=`${source}|${target}|${item.text}`;
+    if(!freeCache.has(key)){
+      const parts=[];
+      for(const part of splitUtf8(item.text)) parts.push(await myMemoryPart(part, source, target, signal));
+      freeCache.set(key, parts.join(' '));
+    }
+    results.push({id:item.id, text:freeCache.get(key)});
+  }
+  return results;
+}
+async function translateBatch(batch, source, target, provider, signal){
+  if(provider==='free'){
+    try { return await translateFreeInBrowser(batch, source, target, signal); }
+    catch(err){ if(isAbort(err)) throw err; /* fall back to the server below */ }
+  }
+  const data=await postJson('/api/translate', {items:batch,source_language:source,target_language:target,provider},signal);
+  return data.translations;
+}
 async function postJson(path, body, signal){
   const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal});
   let data={}; try{data=await res.json();}catch(_){}
@@ -157,9 +215,9 @@ async function translatePage(event){
         if(controller.signal.aborted) return;
         const batch=batches[j];
         try {
-          const data=await postJson('/api/translate', {items:batch,source_language:source,target_language:target,provider},controller.signal);
-          data.translations.forEach(applyTranslation);
-          count+=data.translations.length;
+          const translations=await translateBatch(batch, source, target, provider, controller.signal);
+          translations.forEach(applyTranslation);
+          count+=translations.length;
         } catch(err){
           if(isAbort(err)) return;
           failed+=batch.length;
